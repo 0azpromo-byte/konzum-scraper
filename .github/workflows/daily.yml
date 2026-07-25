@@ -27,4 +27,4 @@ jobs:
           echo "${{ secrets.FIREBASE_SERVICE_ACCOUNT }}" > serviceAccountKey.json
 
       - name: Run Konzum scraper
-        run: python konzum_scraper.py
+        run: python scraper.py
