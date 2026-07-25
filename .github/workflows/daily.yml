@@ -22,9 +22,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Setup Firebase credentials
-        run: |
-          mkdir -p $HOME/.config/gcloud
-          echo "${{ secrets.FIREBASE_SERVICE_ACCOUNT }}" > serviceAccountKey.json
+        run: printf '%s' "${{ secrets.FIREBASE_SERVICE_ACCOUNT }}" > serviceAccountKey.json
 
-      - name: Run Konzum scraper
+      - name: Run scraper
         run: python scraper.py
