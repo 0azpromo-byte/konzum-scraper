@@ -1,33 +1,30 @@
-name: Daily Konzum Scraper
+name: Scrape Konzum
 
 on:
   schedule:
-    - cron: '0 7 * * *'
+    - cron: '0 23 * * *'
   workflow_dispatch:
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
+      - uses: actions/checkout@v3
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-
       - name: Install dependencies
         run: pip install -r requirements.txt
-
-      - name: Setup Firebase credentials
+      - name: Run scraper
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-        run: echo "$FIREBASE_SERVICE_ACCOUNT" > serviceAccountKey.json
-
-      - name: Check JSON
-        run: head -c 100 serviceAccountKey.json
-
-      - name: Run scraper
-        run: python scraper.py
+        run: |
+          echo "$FIREBASE_SERVICE_ACCOUNT" > serviceAccountKey.json
+          python scraper.py
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: '*.log'
