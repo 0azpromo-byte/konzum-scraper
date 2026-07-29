@@ -1,5 +1,5 @@
-"""Konzum scraper -> Firestore ("cijene" kolekcija)
-
+"""
+Konzum scraper -> Firestore ("cijene" kolekcija)
 
 Konzum mehanizam:
 - stranica /cjenici sadrži CSV linkove za sve poslovnice (sa stranicama)
@@ -8,15 +8,12 @@ Konzum mehanizam:
 - CSV je , (zarez) delimited, UTF-8 encoding
 - CSV sadrži 12 stupaca
 
-
 Pokretanje lokalno (brzi test, 100 artikala):
     LOKALNI_TEST=true python scraper.py
-
 
 Puni run (2000 artikala, za GitHub):
     python scraper.py
 """
-
 
 import csv
 import hashlib
@@ -25,14 +22,16 @@ import os
 import re
 from datetime import datetime
 
-
 import requests
 from bs4 import BeautifulSoup
 import firebase_admin
 from firebase_admin import credentials, firestore
-from google.cloud.firestore_v1.base_query import FieldFilter
 
-
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "hr-HR,hr;q=0.9,en;q=0.8",
+}
 
 
 # ---------- KONFIGURACIJA ----------
@@ -42,14 +41,11 @@ GRAD = "Bjelovar"
 DELIMITER = ","
 CSV_ENCODING = "utf-8"
 
-
 BASE_URL = "https://www.konzum.hr"
 INDEX_URL = "https://www.konzum.hr/cjenici"
 PAGES_TO_CHECK = 5
 
-
 LOKALNI_TEST = os.environ.get("LOKALNI_TEST", "false").lower() == "true"
-
 
 if LOKALNI_TEST:
     KVOTA_HRANA = 50
@@ -57,7 +53,6 @@ if LOKALNI_TEST:
 else:
     KVOTA_HRANA = 1000
     KVOTA_OSTALO_UKUPNO = 1000
-
 
 KATEGORIJE_MAP = {
     "hrana": "HRANA",
@@ -71,7 +66,6 @@ KATEGORIJE_MAP = {
     "proizvodi za kućanstvo": "PROIZVODI ZA KUĆANSTVO",
 }
 
-
 STUPAC_NAZIV = "NAZIV PROIZVODA"
 STUPAC_SIFRA = "ŠIFRA PROIZVODA"
 STUPAC_MARKA = "MARKA PROIZVODA"
@@ -83,8 +77,6 @@ STUPAC_KATEGORIJA = "KATEGORIJA PROIZVODA"
 STUPAC_POSEB_OBLIK = "MPC ZA VRIJEME POSEBNOG OBLIKA PRODAJE"
 
 
-
-
 # ---------- INICIJALIZACIJA ----------
 if not firebase_admin._apps:
     cred = credentials.Certificate(SERVICE_ACCOUNT)
@@ -92,18 +84,9 @@ if not firebase_admin._apps:
 db = firestore.client()
 
 
-# ---------- PROVJERA DUPLIKATA ----------
-def vec_scrapano_danas(trgovina: str) -> bool:
-    """Provjeri postoji li već današnji datum za ovu trgovinu u cijene kolekciji."""
-    today = datetime.now().strftime("%Y-%m-%d")
-    check = (
-        db.collection("cijene")
-        .where(filter=FieldFilter("trgovina", "==", trgovina))
-        .where(filter=FieldFilter("datum", "==", today))
-        .limit(1)
-        .get()
-    )
-    return len(check) > 0
+# ---------- SESSION ----------
+_session = requests.Session()
+_session.headers.update(HEADERS)
 
 
 # ---------- PRONALAŽENJE CSV-a ----------
@@ -113,10 +96,9 @@ def pronadji_csv_url() -> str | None:
     for page in range(1, PAGES_TO_CHECK + 1):
         url = f"{INDEX_URL}?page={page}"
         print(f"🔍 Provjeravam {url}...")
-        resp = requests.get(url, timeout=30)
+        resp = _session.get(url, timeout=30)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.content.decode("utf-8"), "html.parser")
-
 
         for link in soup.find_all("a", href=True):
             href = link["href"]
@@ -125,17 +107,13 @@ def pronadji_csv_url() -> str | None:
                     return BASE_URL + href
                 return href
 
-
     return None
-
-
 
 
 def preuzmi_csv(csv_url: str) -> str | None:
     """Preuzima CSV i vraća dekodirani sadržaj."""
-    resp = requests.get(csv_url, timeout=60)
+    resp = _session.get(csv_url, timeout=60, headers={"Referer": INDEX_URL})
     resp.raise_for_status()
-
 
     for enc in (CSV_ENCODING, "utf-8-sig", "cp1250"):
         try:
@@ -143,8 +121,6 @@ def preuzmi_csv(csv_url: str) -> str | None:
         except UnicodeDecodeError:
             continue
     raise ValueError("Ne mogu dekodirati CSV")
-
-
 
 
 # ---------- OBRADA CSV-a ----------
@@ -158,8 +134,6 @@ def normaliziraj_kategoriju(raw: str) -> str | None:
     return raw.strip().upper()
 
 
-
-
 def parsiraj_broj(raw: str) -> float | None:
     if not raw or raw.strip() in ("", "0"):
         return None
@@ -169,12 +143,9 @@ def parsiraj_broj(raw: str) -> float | None:
         return None
 
 
-
-
 def obradi_csv(sadrzaj: str) -> list[dict]:
     proizvodi = []
     reader = csv.DictReader(io.StringIO(sadrzaj), delimiter=DELIMITER)
-
 
     for row in reader:
         barkod = row.get(STUPAC_BARKOD, "").strip()
@@ -186,22 +157,17 @@ def obradi_csv(sadrzaj: str) -> list[dict]:
         kategorija_raw = row.get(STUPAC_KATEGORIJA, "").strip()
         akcijska_cijena_val = parsiraj_broj(row.get(STUPAC_POSEB_OBLIK, ""))
 
-
         if not barkod or not naziv:
             continue
 
-
         redovna_cijena = parsiraj_broj(redovna_cijena_str)
-
 
         if redovna_cijena is None and akcijska_cijena_val is None:
             continue
 
-
         kategorija = normaliziraj_kategoriju(kategorija_raw)
         if kategorija is None:
             continue
-
 
         if redovna_cijena is not None and akcijska_cijena_val is not None and akcijska_cijena_val < redovna_cijena:
             tip = "akcija"
@@ -215,7 +181,6 @@ def obradi_csv(sadrzaj: str) -> list[dict]:
             tip = "akcija"
             cijena = akcijska_cijena_val
             stara_cijena = None
-
 
         proizvodi.append({
             "barkod": barkod,
@@ -231,10 +196,7 @@ def obradi_csv(sadrzaj: str) -> list[dict]:
             "datum": datetime.now().strftime("%Y-%m-%d"),
         })
 
-
     return proizvodi
-
-
 
 
 # ---------- ODABIR PROIZVODA ----------
@@ -242,30 +204,23 @@ def deterministicki_kljuc(p: dict) -> str:
     return hashlib.md5(p["barkod"].encode()).hexdigest()
 
 
-
-
 def odaberi_proizvode(proizvodi: list[dict]) -> list[dict]:
     kategorije: dict[str, list[dict]] = {}
     for p in proizvodi:
         kategorije.setdefault(p["kategorija"], []).append(p)
 
-
     print("🔍 Pronađene kategorije:")
     for kat, lista in sorted(kategorije.items(), key=lambda x: -len(x[1])):
         print(f"   {kat}: {len(lista)}")
 
-
     odabrani = []
-
 
     hrana = sorted(kategorije.get("HRANA", []), key=deterministicki_kljuc)
     odabrani.extend(hrana[:KVOTA_HRANA])
     print(f"  📌 HRANA: odabrano {min(len(hrana), KVOTA_HRANA)}/{len(hrana)}")
 
-
     ostale_kat = {k: v for k, v in kategorije.items() if k != "HRANA"}
     ukupno_ostalo_dostupno = sum(len(v) for v in ostale_kat.values())
-
 
     for kat, lista in sorted(ostale_kat.items(), key=lambda x: -len(x[1])):
         udio = len(lista) / ukupno_ostalo_dostupno if ukupno_ostalo_dostupno else 0
@@ -275,10 +230,7 @@ def odaberi_proizvode(proizvodi: list[dict]) -> list[dict]:
         odabrani.extend(lista_sortirana[:broj])
         print(f"  📌 {kat}: odabrano {broj}/{len(lista)}")
 
-
     return odabrani
-
-
 
 
 # ---------- SPREMANJE ----------
@@ -303,8 +255,6 @@ def spremi_u_firestore(proizvodi: list[dict], batch_size: int = 500) -> int:
     return brojac
 
 
-
-
 # ---------- GLAVNI DIO ----------
 def main():
     print("\n" + "=" * 50)
@@ -313,26 +263,18 @@ def main():
     print(f"   način rada: {nacin}")
     print("=" * 50 + "\n")
 
-    # Provjera duplikata - preskoči ako je već scrapano danas
-    if vec_scrapano_danas(TRGOVINA):
-        print(f"⏭️ {TRGOVINA} je već scrapano danas ({datetime.now():%Y-%m-%d}). Preskačem.")
-        return
-
     csv_url = pronadji_csv_url()
     if not csv_url:
         print("❌ Nije pronađen CSV za Bjelovar!")
         return
 
-
     print(f"✅ Pronađen CSV: {csv_url}")
-
 
     print(f"📥 Preuzimam CSV za {GRAD}...")
     csv_sadrzaj = preuzmi_csv(csv_url)
     if not csv_sadrzaj:
         print("❌ CSV je prazan!")
         return
-
 
     print("🔄 Obrađujem CSV...")
     proizvodi = obradi_csv(csv_sadrzaj)
@@ -341,18 +283,14 @@ def main():
         return
     print(f"✅ Ukupno proizvoda u CSV-u: {len(proizvodi)}")
 
-
     odabrani = odaberi_proizvode(proizvodi)
     print(f"\n📊 Ukupno odabrano za {TRGOVINA}: {len(odabrani)}")
-
 
     if odabrani:
         spremi_u_firestore(odabrani)
         print(f"\n✅ Završeno! Upisano {len(odabrani)} dokumenata za {TRGOVINA}.")
     else:
         print("❌ Nema odabranih proizvoda, ništa nije spremljeno.")
-
-
 
 
 if __name__ == "__main__":
