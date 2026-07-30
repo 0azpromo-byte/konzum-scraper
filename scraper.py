@@ -23,6 +23,7 @@ import hashlib
 import io
 import os
 import re
+import time
 from datetime import datetime
 
 
@@ -126,17 +127,27 @@ def pronadji_csv_url() -> str | None:
 
 
 def preuzmi_csv(csv_url: str) -> str | None:
-    """Preuzima CSV i vraća dekodirani sadržaj."""
-    resp = requests.get(csv_url, timeout=60)
-    resp.raise_for_status()
-
-
-    for enc in (CSV_ENCODING, "utf-8-sig", "cp1250"):
+    """Preuzima CSV i vraća dekodirani sadržaj. Retry na 404 ili connection error."""
+    max_retries = 5
+    for attempt in range(1, max_retries + 1):
         try:
-            return resp.content.decode(enc)
-        except UnicodeDecodeError:
-            continue
-    raise ValueError("Ne mogu dekodirati CSV")
+            resp = requests.get(csv_url, timeout=60)
+            resp.raise_for_status()
+            for enc in (CSV_ENCODING, "utf-8-sig", "cp1250"):
+                try:
+                    return resp.content.decode(enc)
+                except UnicodeDecodeError:
+                    continue
+            raise ValueError("Ne mogu dekodirati CSV")
+        except requests.exceptions.RequestException as e:
+            is_404 = isinstance(e, requests.exceptions.HTTPError) and e.response.status_code == 404
+            if not is_404 and not isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+                raise
+            if attempt < max_retries:
+                print(f"  ⏳ CSV nedostupan (HTTP 404 ili mrežna greška), pokušaj {attempt}/{max_retries} – čekam 30s...")
+                time.sleep(30)
+                continue
+            raise
 
 
 # ---------- OBRADA CSV-a ----------
